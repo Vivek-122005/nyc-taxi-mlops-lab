@@ -53,6 +53,28 @@ def test_sql_files_fill_validated_month():
         check_month("2024-03'; drop table x; --")
 
 
+def test_s2_training_window_and_unload_escape_source_literals():
+    from labpipes.defs.training import HOLDOUT_MONTH, TRAINING_WINDOW, _unload
+
+    assert TRAINING_WINDOW == "2024-01..2024-03" and HOLDOUT_MONTH == "2024-04"
+    sql = _unload("select * from x where trip_month = '2024-01'", "s3://artifacts/test/")
+    assert "trip_month = ''2024-01''" in sql
+    assert sql.endswith("format as parquet allowoverwrite")
+
+
+def test_s2_feature_contract_has_only_model_boundary_columns():
+    from labpipes.defs.feature_check import expected_columns
+
+    assert expected_columns() == [
+        ("trip_month", "char(7)"),
+        ("pickup_zone_id", "integer"),
+        ("dropoff_zone_id", "integer"),
+        ("pickup_hour", "smallint"),
+        ("pickup_dow", "smallint"),
+        ("duration_min", "double precision"),
+    ]
+
+
 class StubClient:
     def __init__(self, status="FINISHED", error=None):
         self.status, self.error, self.calls = status, error, []

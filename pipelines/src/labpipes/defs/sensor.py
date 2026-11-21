@@ -12,6 +12,8 @@ import dagster as dg
 from ..partitions import trip_months
 from ..resources import DataBucket
 from .marts import zone_hour_stats
+from .feature_check import feature_contract
+from .features import trip_features
 from .quality import stg_trip_anomalies
 from .raw_trips import raw_trips
 from .schema_check import schema_contract
@@ -23,8 +25,8 @@ from .zones import taxi_zones
 ingest_month = dg.define_asset_job(
     "ingest_month",
     selection=(
-        dg.AssetSelection.assets(trip_files, raw_trips, stg_trips, taxi_zones, zone_hour_stats).without_checks()
-        | dg.AssetSelection.checks(schema_contract, stg_trip_anomalies)
+        dg.AssetSelection.assets(trip_files, raw_trips, stg_trips, trip_features, taxi_zones, zone_hour_stats).without_checks()
+        | dg.AssetSelection.checks(schema_contract, stg_trip_anomalies, feature_contract)
     ),
 )
 

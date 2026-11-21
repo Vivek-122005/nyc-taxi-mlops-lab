@@ -89,6 +89,8 @@ jobs:
       LAB_DATA_BUCKET: ${{ vars.LAB_DATA_BUCKET }}
       LAB_ARTIFACT_BUCKET: ${{ vars.LAB_ARTIFACT_BUCKET }}
       LLM_HOST: ${{ vars.LLM_HOST }}
+      PROMOTION_MIN_MAE_IMPROVEMENT_MIN: ${{ vars.PROMOTION_MIN_MAE_IMPROVEMENT_MIN }}
+      PROMOTION_MAX_P95_LATENCY_MS: ${{ vars.PROMOTION_MAX_P95_LATENCY_MS }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: docker/login-action@v4.6.0

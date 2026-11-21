@@ -24,6 +24,9 @@ x-pipelines: &pipelines
     LLM_HOST: ${LLM_HOST:-}  # S6: the embedding server for wiki_embeddings
     LAB_ARTIFACT_BUCKET: ${LAB_ARTIFACT_BUCKET:?set LAB_ARTIFACT_BUCKET}
     MLFLOW_TRACKING_URI: http://mlflow:5000
+    # S2: unset until the student measures v1/v2 and records an evidence-backed promotion policy.
+    PROMOTION_MIN_MAE_IMPROVEMENT_MIN: ${PROMOTION_MIN_MAE_IMPROVEMENT_MIN:-}
+    PROMOTION_MAX_P95_LATENCY_MS: ${PROMOTION_MAX_P95_LATENCY_MS:-}
   volumes:
     - dagster-storage:/opt/dagster/home/storage
 
