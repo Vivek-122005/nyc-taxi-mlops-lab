@@ -54,12 +54,13 @@ def test_sql_files_fill_validated_month():
 
 
 def test_s2_training_window_and_unload_escape_source_literals():
-    from labpipes.defs.training import HOLDOUT_MONTH, TRAINING_WINDOW, _unload
+    from labpipes.defs.training import HOLDOUT_MONTH, TRAINING_WINDOW, _candidate_key, _unload
 
     assert TRAINING_WINDOW == "2024-01..2024-03" and HOLDOUT_MONTH == "2024-04"
     sql = _unload("select * from x where trip_month = '2024-01'", "s3://artifacts/test/")
     assert "trip_month = ''2024-01''" in sql
     assert sql.endswith("format as parquet allowoverwrite")
+    assert _candidate_key("run-123") == "training/candidates/run-123.json"
 
 
 def test_s2_feature_contract_has_only_model_boundary_columns():

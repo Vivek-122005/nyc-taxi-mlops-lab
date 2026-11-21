@@ -52,13 +52,17 @@ def _unload(select: str, destination: str) -> str:
     return f"unload ('{escaped}') to '{destination}' iam_role default format as parquet allowoverwrite"
 
 
-def _candidate(context: dg.AssetExecutionContext, tracking: MlflowTracking):
-    """The model version produced by this Dagster run, not merely the latest global version."""
-    versions = tracking.client().search_model_versions(f"name = '{mlflow_contract()['registered_model']}'")
-    matches = [version for version in versions if version.tags.get("dagster_run_id") == context.run_id]
-    if len(matches) != 1:
-        raise RuntimeError(f"expected one candidate model for Dagster run {context.run_id}, found {len(matches)}")
-    return matches[0]
+def _candidate_key(dagster_run_id: str) -> str:
+    """An immutable hand-off between assets in one Dagster run, stored with the training artifacts."""
+    return f"training/candidates/{dagster_run_id}.json"
+
+
+def _candidate(context: dg.AssetExecutionContext, artifacts: ArtifactBucket) -> Candidate:
+    """The exact registered version produced by this Dagster run, never a global 'latest' lookup."""
+    try:
+        return Candidate(**artifacts.read_json(_candidate_key(context.run_id)))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"candidate record for Dagster run {context.run_id} was not written by trained_model") from exc
 
 
 def _promotion_policy() -> tuple[float, float] | None:
@@ -136,6 +140,8 @@ def trained_model(context: dg.AssetExecutionContext, artifacts: ArtifactBucket, 
         client.set_model_version_tag(contract["registered_model"], info.registered_model_version, "holdout_month", HOLDOUT_MONTH)
         client.set_model_version_tag(contract["registered_model"], info.registered_model_version, "features_version", str(features_contract()["version"]))
         client.set_model_version_tag(contract["registered_model"], info.registered_model_version, "git_sha", os.environ.get("GIT_SHA", "unknown"))
+    candidate = Candidate(version=str(info.registered_model_version), run_id=run.info.run_id)
+    artifacts.write_json(_candidate_key(context.run_id), {"version": candidate.version, "run_id": candidate.run_id})
     return dg.MaterializeResult(metadata={"model_version": info.registered_model_version, "mlflow_run_id": run.info.run_id})
 
 
@@ -144,7 +150,7 @@ def eval_report(context: dg.AssetExecutionContext, artifacts: ArtifactBucket, re
     """Evaluate the candidate and the current comparison model on precisely the same holdout rows."""
     holdout = artifacts.read_parquet(f"{TRAINING_PREFIX}/holdout/")
     boroughs = {int(row["location_id"]): row["borough"] for row in redshift.query("select location_id, borough from ingest.taxi_zones")}
-    candidate = _candidate(context, tracking)
+    candidate = _candidate(context, artifacts)
     candidate_model = mlflow.pyfunc.load_model(f"models:/{mlflow_contract()['registered_model']}/{candidate.version}")
     candidate_metrics = evaluate(candidate_model.predict, holdout, boroughs)
     comparison = "v1 baseline"
@@ -181,10 +187,10 @@ def eval_report(context: dg.AssetExecutionContext, artifacts: ArtifactBucket, re
     blocking=True,
     description="Candidate must improve holdout MAE by the decided margin and stay within the decided p95 latency budget.",
 )
-def beats_champion(context: dg.AssetCheckExecutionContext, tracking: MlflowTracking) -> dg.AssetCheckResult:
+def beats_champion(context: dg.AssetCheckExecutionContext, artifacts: ArtifactBucket, tracking: MlflowTracking) -> dg.AssetCheckResult:
     """Fail closed until the student records numerical gate values, then enforce both requirements."""
-    candidate = _candidate(context, tracking)
-    tags = candidate.tags
+    candidate = _candidate(context, artifacts)
+    tags = tracking.client().get_model_version(mlflow_contract()["registered_model"], candidate.version).tags
     policy = _promotion_policy()
     mae = float(tags["mae_min"])
     reference = float(tags["champion_mae_min"])
@@ -215,9 +221,9 @@ def beats_champion(context: dg.AssetCheckExecutionContext, tracking: MlflowTrack
 
 
 @dg.asset(deps=[eval_report], group_name="model", kinds={"mlflow"})
-def challenger(context: dg.AssetExecutionContext, tracking: MlflowTracking) -> dg.MaterializeResult:
+def challenger(context: dg.AssetExecutionContext, artifacts: ArtifactBucket, tracking: MlflowTracking) -> dg.MaterializeResult:
     """Set only challenger, after the blocking beats_champion check has passed in this run."""
-    candidate = _candidate(context, tracking)
+    candidate = _candidate(context, artifacts)
     tracking.client().set_registered_model_alias(mlflow_contract()["registered_model"], "challenger", candidate.version)
     return dg.MaterializeResult(metadata={"alias": "challenger", "model_version": candidate.version})
 
