@@ -20,4 +20,4 @@ make aws-check        # STS must succeed before AWS steps
 - `dagster-run.sh JOB [--partition YYYY-MM] [--wait]`: start a Dagster job on the platform host via SSM.
 - `health.sh` (S4, given): read-only, one line per piece of the lab, exit 0 only when all are OK. Start every morning and every incident with it.
 - `verify-teardown.sh` (S10, given): every billable thing left in us-east-1 and us-west-2, one line each; you're done when it prints nothing.
-- `restore.sh` (your S4 automation, in the reference): bring the lab back after a session end.
+- `restore.sh` (S4): explicitly restore a stopped RDS instance and paused Redshift cluster after a session end, wait for both to be available, and leave the notebook stopped. It never starts anything unless you invoke it.
