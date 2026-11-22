@@ -1,0 +1,60 @@
+# promtool unit tests for S5 SLO burn-rate alerts.
+# An outage (sustained fallback / 5xx) pages; a short spike does not.
+rule_files:
+  - slo.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Sustained serving outage → almost all quotes from fallback → ModelFallbackFastBurn fires.
+  - name: outage pages on model-not-fallback
+    interval: 1m
+    input_series:
+      - series: 'lab_predictions_total{source="fallback",alias="",version=""}'
+        # 90 minutes of steady fallback traffic
+        values: "0+60x90"
+      - series: 'lab_predictions_total{source="model",alias="champion",version="5"}'
+        values: "0x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ModelFallbackFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: model-not-fallback
+            exp_annotations:
+              summary: "Quotes falling back to static median (model SLO burn)"
+              description: "model/total prediction share is burning the 99% error budget fast — serving likely down or timing out."
+
+  # A few minutes of fallback inside an otherwise healthy hour → 5m burn high, 1h burn low → no page.
+  - name: short spike does not page
+    interval: 1m
+    input_series:
+      - series: 'lab_predictions_total{source="model",alias="champion",version="5"}'
+        # mostly model: 0..54 model-only, then 55..59 fallback spike, then model again
+        values: "0+60x54 3240+0x5 3240+60x30"
+      - series: 'lab_predictions_total{source="fallback",alias="",version=""}'
+        values: "0x54 0+60x5 300+0x30"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ModelFallbackFastBurn
+        exp_alerts: []
+
+  # Sustained 5xx on /predict → availability burn pages.
+  - name: outage pages on predict-availability
+    interval: 1m
+    input_series:
+      - series: 'lab_http_requests_total{route="/predict",method="POST",code="500"}'
+        values: "0+30x90"
+      - series: 'lab_http_requests_total{route="/predict",method="POST",code="200"}'
+        values: "0x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PredictAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: predict-availability
+            exp_annotations:
+              summary: "/predict availability burning error budget fast"
+              description: "5m burn 100× (need >14.4 on both 5m and 1h). Objective 99%."

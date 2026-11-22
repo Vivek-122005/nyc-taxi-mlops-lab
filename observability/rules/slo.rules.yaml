@@ -2,4 +2,102 @@
 # Prometheus rule format: https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/
 # Metric names are contracts/metrics.yaml's. `make check` runs promtool on this file and on any
 # *.test.yaml next to it.
-groups: []
+#
+# Error-budget burn: for a 30d window at objective o, burn rate B means budget burns in 30d/B.
+# Fast burn 14.4 ≈ exhausts the 30d budget in ~5h; require both 5m and 1h windows so a short spike
+# does not page (Google SRE workbook multi-window pattern).
+groups:
+  - name: lab-slo-recording
+    interval: 30s
+    rules:
+      # --- predict-availability (objective 0.99) ---
+      - record: lab:sli:predict_availability:ratio_rate5m
+        expr: |
+          (
+            sum(rate(lab_http_requests_total{route="/predict",code!~"5.."}[5m]))
+            /
+            sum(rate(lab_http_requests_total{route="/predict"}[5m]))
+          )
+      - record: lab:sli:predict_availability:ratio_rate1h
+        expr: |
+          (
+            sum(rate(lab_http_requests_total{route="/predict",code!~"5.."}[1h]))
+            /
+            sum(rate(lab_http_requests_total{route="/predict"}[1h]))
+          )
+      - record: lab:slo:predict_availability:burn_rate5m
+        expr: (1 - lab:sli:predict_availability:ratio_rate5m) / (1 - 0.99)
+      - record: lab:slo:predict_availability:burn_rate1h
+        expr: (1 - lab:sli:predict_availability:ratio_rate1h) / (1 - 0.99)
+
+      # --- predict-latency (objective 0.95 within 0.5s) ---
+      - record: lab:sli:predict_latency:ratio_rate5m
+        expr: |
+          (
+            sum(rate(lab_http_request_duration_seconds_bucket{route="/predict",le="0.5"}[5m]))
+            /
+            sum(rate(lab_http_request_duration_seconds_count{route="/predict"}[5m]))
+          )
+      - record: lab:sli:predict_latency:ratio_rate1h
+        expr: |
+          (
+            sum(rate(lab_http_request_duration_seconds_bucket{route="/predict",le="0.5"}[1h]))
+            /
+            sum(rate(lab_http_request_duration_seconds_count{route="/predict"}[1h]))
+          )
+      - record: lab:slo:predict_latency:burn_rate5m
+        expr: (1 - lab:sli:predict_latency:ratio_rate5m) / (1 - 0.95)
+      - record: lab:slo:predict_latency:burn_rate1h
+        expr: (1 - lab:sli:predict_latency:ratio_rate1h) / (1 - 0.95)
+
+      # --- model-not-fallback (objective 0.99) ---
+      - record: lab:sli:model_not_fallback:ratio_rate5m
+        expr: |
+          (
+            sum(rate(lab_predictions_total{source="model"}[5m]))
+            /
+            sum(rate(lab_predictions_total[5m]))
+          )
+      - record: lab:sli:model_not_fallback:ratio_rate1h
+        expr: |
+          (
+            sum(rate(lab_predictions_total{source="model"}[1h]))
+            /
+            sum(rate(lab_predictions_total[1h]))
+          )
+      - record: lab:slo:model_not_fallback:burn_rate5m
+        expr: (1 - lab:sli:model_not_fallback:ratio_rate5m) / (1 - 0.99)
+      - record: lab:slo:model_not_fallback:burn_rate1h
+        expr: (1 - lab:sli:model_not_fallback:ratio_rate1h) / (1 - 0.99)
+
+  - name: lab-slo-alerts
+    rules:
+      - alert: PredictAvailabilityFastBurn
+        expr: lab:slo:predict_availability:burn_rate5m > 14.4 and lab:slo:predict_availability:burn_rate1h > 14.4
+        for: 2m
+        labels:
+          severity: page
+          slo: predict-availability
+        annotations:
+          summary: "/predict availability burning error budget fast"
+          description: "5m burn {{ $value | humanize }}× (need >14.4 on both 5m and 1h). Objective 99%."
+
+      - alert: PredictLatencyFastBurn
+        expr: lab:slo:predict_latency:burn_rate5m > 14.4 and lab:slo:predict_latency:burn_rate1h > 14.4
+        for: 2m
+        labels:
+          severity: page
+          slo: predict-latency
+        annotations:
+          summary: "/predict latency SLO burning error budget fast"
+          description: "Share within 0.5s is below the 95% objective enough to burn the 30d budget in ~5h."
+
+      - alert: ModelFallbackFastBurn
+        expr: lab:slo:model_not_fallback:burn_rate5m > 14.4 and lab:slo:model_not_fallback:burn_rate1h > 14.4
+        for: 2m
+        labels:
+          severity: page
+          slo: model-not-fallback
+        annotations:
+          summary: "Quotes falling back to static median (model SLO burn)"
+          description: "model/total prediction share is burning the 99% error budget fast — serving likely down or timing out."

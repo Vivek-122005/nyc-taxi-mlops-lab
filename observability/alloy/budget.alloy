@@ -1,4 +1,4 @@
-// Your series budget (S5, decision 014). Every series from this host passes through one of these three
+// Series budget (S5, decision 014). Every series from this host passes through one of these three
 // before it's sent. Grafana Cloud's free tier allows 10,000 active series for all hosts together
 // (contracts/metrics.yaml). With no rules, everything is sent.
 //
@@ -12,7 +12,12 @@ declare "host" {
 	prometheus.relabel "rules" {
 		forward_to = argument.forward_to.value
 
-		// Your rules for the host's series: CPU? memory? disk? which network devices?
+		// Hosts row: CPU busy (idle mode), memory headroom, root filesystem pressure.
+		rule {
+			source_labels = ["__name__"]
+			regex         = "node_cpu_seconds_total|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_filesystem_avail_bytes|node_filesystem_size_bytes"
+			action        = "keep"
+		}
 	}
 
 	export "receiver" {
@@ -26,7 +31,16 @@ declare "containers" {
 	prometheus.relabel "rules" {
 		forward_to = argument.forward_to.value
 
-		// Your rules for the containers' series: which metrics, and which labels change on every deploy?
+		rule {
+			source_labels = ["__name__"]
+			regex         = "container_memory_working_set_bytes|container_cpu_usage_seconds_total"
+			action        = "keep"
+		}
+		// id / image_id change on every recreate and would burn the series budget across CD deploys.
+		rule {
+			regex  = "id|image_id|container_label_com_docker_compose_config_hash|container_label_com_docker_compose_image"
+			action = "labeldrop"
+		}
 	}
 
 	export "receiver" {
@@ -40,7 +54,12 @@ declare "services" {
 	prometheus.relabel "rules" {
 		forward_to = argument.forward_to.value
 
-		// Your rules for the services' series (contracts/metrics.yaml, Traefik, runtime metrics).
+		// Lab contract metrics + Traefik service series used by the ride-app dashboard and SLOs.
+		rule {
+			source_labels = ["__name__"]
+			regex         = "lab_.+|traefik_service_requests_total|traefik_service_request_duration_seconds_bucket|traefik_service_request_duration_seconds_sum|traefik_service_request_duration_seconds_count"
+			action        = "keep"
+		}
 	}
 
 	export "receiver" {

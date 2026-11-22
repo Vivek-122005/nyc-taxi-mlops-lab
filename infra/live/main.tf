@@ -67,3 +67,9 @@ module "wiki_secret" {
   name        = "lab/wiki"
   description = "Wiki URL and token (contracts/runtime.yaml secrets.wiki); value put out of band."
 }
+
+module "grafana_secret" {
+  source      = "../modules/secret"
+  name        = "lab/grafana"
+  description = "Grafana Cloud Prometheus remote-write URL, user and token (S5); value put out of band."
+}
