@@ -1,0 +1,87 @@
+# Promote an evaluated MLflow version to champion (S3). Approval-gated via the production environment.
+#
+#   gh workflow run promote.yaml
+#   # optional: -f version=3  (default: whatever challenger points at)
+#
+# Runs on the app host. Moves only the champion alias (never challenger), reloads serving-champion,
+# and smokes /predict through Traefik.
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Registered model version to promote (empty = current challenger alias)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: [self-hosted, lab-app]
+    environment: production
+    timeout-minutes: 20
+    env:
+      MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
+      MODEL_NAME: trip-duration
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Resolve version and require pipeline evaluation tags
+        id: resolve
+        run: |
+          set -euo pipefail
+          : "${MLFLOW_TRACKING_URI:?set MLFLOW_TRACKING_URI repository variable}"
+          version="${{ inputs.version }}"
+          if [[ -z "$version" ]]; then
+            version=$(curl -fsS "$MLFLOW_TRACKING_URI/api/2.0/mlflow/registered-models/alias?name=${MODEL_NAME}&alias=challenger" \
+              | jq -r '.model_version.version // empty')
+            [[ -n "$version" ]] || { echo "no challenger alias and no version input" >&2; exit 1; }
+          fi
+          mv=$(curl -fsS "$MLFLOW_TRACKING_URI/api/2.0/mlflow/model-versions/get?name=${MODEL_NAME}&version=${version}")
+          tags=$(jq -c '[.model_version.tags[]? | {key, value}]' <<<"$mv")
+          for required in mae_min p95_latency_ms champion_mae_min training_window holdout_month features_version; do
+            jq -e --arg k "$required" 'map(select(.key == $k)) | length == 1' <<<"$tags" >/dev/null \
+              || { echo "version $version is missing evaluation tag $required (pipeline must evaluate it first)" >&2; exit 1; }
+          done
+          outgoing=$(curl -fsS "$MLFLOW_TRACKING_URI/api/2.0/mlflow/registered-models/alias?name=${MODEL_NAME}&alias=champion" \
+            | jq -r '.model_version.version // empty' || true)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "outgoing=${outgoing:-none}" >> "$GITHUB_OUTPUT"
+          echo "promoting v$version (outgoing champion: ${outgoing:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Record outgoing champion and move alias
+        run: |
+          set -euo pipefail
+          version="${{ steps.resolve.outputs.version }}"
+          outgoing="${{ steps.resolve.outputs.outgoing }}"
+          printf '%s\n' "{\"promoted_version\":\"$version\",\"outgoing_champion\":\"$outgoing\",\"at\":\"$(date -u +%FT%TZ)\"}" \
+            | tee promotion-record.json
+          curl -fsS -X POST "$MLFLOW_TRACKING_URI/api/2.0/mlflow/registered-models/alias" \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"${MODEL_NAME}\",\"alias\":\"champion\",\"version\":\"${version}\"}" >/dev/null
+          echo "champion -> v$version"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: promotion-record
+          path: promotion-record.json
+          retention-days: 30
+      - name: Reload serving-champion and smoke /predict
+        run: |
+          set -euo pipefail
+          deploy/web.sh reload champion
+          model=$(curl -fsS http://127.0.0.1:8001/model -H 'X-Lab-Alias: champion' || \
+            docker exec lab-serving-serving-champion-1 python -c 'import urllib.request; print(urllib.request.urlopen("http://localhost:8001/model").read().decode())')
+          echo "serving-champion /model: $model"
+          echo "$model" | jq -e --arg v "${{ steps.resolve.outputs.version }}" \
+            '.alias == "champion" and (.version|tostring) == $v' >/dev/null
+          pred=$(curl -fsS -H 'Content-Type: application/json' http://127.0.0.1/predict \
+            -d '{"pickup_zone_id":132,"dropoff_zone_id":230,"pickup_datetime":"2024-03-08T17:05:00"}' \
+            || curl -fsS -H 'Content-Type: application/json' -H 'X-Lab-Alias: champion' http://127.0.0.1:8001/predict \
+            -d '{"pickup_zone_id":132,"dropoff_zone_id":230,"pickup_hour":17,"pickup_dow":5}')
+          echo "predict: $pred"
+          echo "$pred" | jq -e '.model.alias == "champion" or .alias == "champion"' >/dev/null
