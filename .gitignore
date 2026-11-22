@@ -7,6 +7,13 @@ tfplan
 backend.hcl
 terraform.tfvars
 
+# Local AWS / lab credentials (copy from aws.env.example)
+aws.env
+.env
+.env.*
+!.env.example
+!aws.env.example
+
 # Python
 .venv/
 __pycache__/
@@ -17,3 +24,4 @@ __pycache__/
 .idea/
 .vscode/
 infra/modules/*/.terraform.lock.hcl
+session-manager-plugin.pkg

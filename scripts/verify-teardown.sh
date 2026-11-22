@@ -5,9 +5,11 @@
 #
 #   scripts/verify-teardown.sh
 #
-# Needs this session's AWS credentials in the environment (the destroy workflow runs it too).
+# Needs this session's AWS credentials (aws.env or exported; the destroy workflow runs it too).
 set -uo pipefail
-export AWS_PAGER=""
+root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 left=0
 
 say() { # REGION KIND ID [DETAIL]
@@ -23,7 +25,7 @@ list() { # REGION KIND -- aws command with --query returning one id (and detail)
   done < <(AWS_REGION=${region/global/us-east-1} "$@" --output text 2>/dev/null)
 }
 
-aws sts get-caller-identity >/dev/null 2>&1 || { echo "AWS credentials missing or expired: export this session's" >&2; exit 2; }
+aws sts get-caller-identity >/dev/null 2>&1 || { echo "AWS credentials missing or expired: paste this session's into $root/aws.env" >&2; exit 2; }
 
 for r in us-east-1 us-west-2; do
   list "$r" ec2-instance -- aws ec2 describe-instances --filters Name=instance-state-name,Values=pending,running,stopping,stopped \

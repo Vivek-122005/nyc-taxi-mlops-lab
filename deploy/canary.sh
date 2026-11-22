@@ -17,7 +17,9 @@
 # p95 is NaN.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
+root="$PWD"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 RESULT=${1:-canary-result.json}
 
 secret=$(aws secretsmanager get-secret-value --secret-id lab/grafana --query SecretString --output text)

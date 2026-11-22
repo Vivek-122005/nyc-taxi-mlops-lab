@@ -9,7 +9,9 @@
 # runner (LabRole) or on a laptop with session credentials. The token needs metrics:write and
 # rules:write (and rules:read for the sync to compare).
 set -euo pipefail
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
+root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 cd "$(dirname "$0")/rules"
 
 PROMTOOL=(docker run --rm -v "$PWD:/r:ro" -w /r --entrypoint promtool prom/prometheus:v3.14.0)

@@ -7,8 +7,9 @@
 # Needs this session's AWS credentials in the environment, gh logged in, and infra/live initialised.
 # Exit status: 0 when every line is OK, 1 otherwise.
 set -uo pipefail
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
 root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 bad=0
 
 line() { # STATUS NAME DETAIL
@@ -17,7 +18,7 @@ line() { # STATUS NAME DETAIL
 }
 
 if ! who=$(aws sts get-caller-identity --query Arn --output text 2>&1); then
-  line FAIL session "AWS credentials don't work: export this session's from Learner Lab ($(tail -1 <<<"$who" | cut -c1-80))"
+  line FAIL session "AWS credentials don't work: paste this session's into $root/aws.env (Learner Lab > AWS Details) ($(tail -1 <<<"$who" | cut -c1-80))"
   exit 1
 fi
 line OK session "${who##*/}"

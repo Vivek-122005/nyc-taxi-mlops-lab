@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Create the Terraform state bucket (once per Learner Lab account) and write infra/live/backend.hcl.
 #
-#   export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...   (AWS Details)
+# Fill aws.env (from aws.env.example) or export the three session vars, then:
 #   infra/bootstrap/state-bucket.sh
 #   terraform -chdir=infra/live init -backend-config=backend.hcl
 #
@@ -9,11 +9,13 @@
 # and the Learner Lab SCP breaks aws_s3_bucket anyway. Locking uses S3's native lockfile
 # (use_lockfile), so no DynamoDB table. Safe to re-run: it adopts an existing bucket.
 set -euo pipefail
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
-
 here="$(cd "$(dirname "$0")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
+
 account=$(aws sts get-caller-identity --query Account --output text) ||
-  { echo "AWS credentials missing or expired: export them from Learner Lab > AWS Details" >&2; exit 1; }
+  { echo "AWS credentials missing or expired: paste them into $root/aws.env (Learner Lab > AWS Details)" >&2; exit 1; }
 bucket="lab-tfstate-${account}"
 
 if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then

@@ -12,7 +12,8 @@ A ride-hailing app quotes trip times with a static median. Product wants predict
    ```
 
 2. **Tools on your laptop** (macOS or Linux; on Windows, work inside WSL): `git`, `gh` (logged in), the AWS CLI v2, Terraform 1.11 or later, `uv`, `make`, `jq`, Docker (optional, for the observability checks) and Claude Code.
-3. **Check:** `make check` passes, and `make agent-check` shows that Claude Code loads `AGENTS.md` here and in `infra/` and `pipelines/`. Each `CLAUDE.md` is a link to its `AGENTS.md`: keep it that way. If you run `/init` or edit a `CLAUDE.md`, run `make agent-check` again.
+3. **AWS session credentials:** copy `aws.env.example` → `aws.env` (`make aws-env`), paste the three Learner Lab keys from AWS Details, then `make aws-check`. Lab scripts load `aws.env` automatically. Re-paste those three lines after each Start Lab.
+4. **Check:** `make check` passes, and `make agent-check` shows that Claude Code loads `AGENTS.md` here and in `infra/` and `pipelines/`. Each `CLAUDE.md` is a link to its `AGENTS.md`: keep it that way. If you run `/init` or edit a `CLAUDE.md`, run `make agent-check` again. After credentials work, `make s2-next` prints the remaining S2 AWS commands.
 
 ## Where things are
 

@@ -2,7 +2,9 @@
 # Register a lab host as a self-hosted GitHub Actions runner over SSM.
 # The runner uses the host's LabInstanceProfile, never static Learner Lab credentials.
 set -euo pipefail
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
+root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 
 runner_version="2.338.2"
 role="${1:-app}"
@@ -19,7 +21,10 @@ esac
 command -v gh >/dev/null || { echo "GitHub CLI (gh) is required" >&2; exit 1; }
 command -v aws >/dev/null || { echo "AWS CLI v2 is required" >&2; exit 1; }
 
-root="$(cd "$(dirname "$0")/.." && pwd)"
+if ! aws sts get-caller-identity >/dev/null 2>&1; then
+  echo "AWS credentials missing or expired: paste this session's keys into $root/aws.env, then re-run." >&2
+  exit 1
+fi
 repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 instance_id="$(terraform -chdir="$root/infra/live" output -raw "${role}_instance_id")"
 label="lab-${role}"
