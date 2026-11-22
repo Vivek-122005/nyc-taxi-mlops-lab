@@ -3,7 +3,19 @@
 # number, and the alert that tells you it's being missed.
 slos:
   - name: predict-availability
-    sli:
-    objective:
-    why:
-    alert:
+    sli: share of app /predict responses that are not 5xx (lab_http_requests_total{route="/predict"})
+    objective: 0.99
+    why: Riders need a quote almost always; 99% over a 30-day window leaves ~7 h of error budget, enough for a short serving outage without paging on every blip.
+    alert: PredictAvailabilityFastBurn (14.4× burn on both 5m and 1h windows)
+
+  - name: predict-latency
+    sli: share of app /predict requests finishing within 0.5s (lab_http_request_duration_seconds bucket le="0.5")
+    objective: 0.95
+    why: Serving times out at 300 ms and the app may fall back; 500 ms at p95 leaves room for Traefik + fallback while still feeling interactive. Stricter (e.g. 99% < 100 ms) would page on cold starts.
+    alert: PredictLatencyFastBurn (14.4× burn on both 5m and 1h windows)
+
+  - name: model-not-fallback
+    sli: share of quotes answered by the model rather than the static median (lab_predictions_total{source="model"})
+    objective: 0.99
+    why: A working lab should serve the champion; falling back is the rider-visible signal that serving is down or slow. 99% matches availability so a stopped champion fires this alert without waiting for 5xx.
+    alert: ModelFallbackFastBurn (14.4× burn on both 5m and 1h windows)
