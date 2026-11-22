@@ -8,7 +8,9 @@
 # port. Needs AWS credentials in the environment and infra/live applied. The run is queued like one
 # started from the UI, so the concurrency limits in pipelines/dagster.yaml apply.
 set -euo pipefail
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
+root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 
 job=${1:?usage: scripts/dagster-run.sh JOB [--partition KEY] [--wait]}
 shift
@@ -24,7 +26,10 @@ done
 [[ -z "$partition" || "$partition" =~ ^[0-9]{4}-[0-9]{2}$ ]] || { echo "not a YYYY-MM partition: $partition" >&2; exit 2; }
 tags=''
 [[ -n "$partition" ]] && tags=", executionMetadata: {tags: [{key: \"dagster/partition\", value: \"$partition\"}]}"
-root="$(cd "$(dirname "$0")/.." && pwd)"
+if ! aws sts get-caller-identity >/dev/null 2>&1; then
+  echo "AWS credentials missing or expired: paste this session's keys into $root/aws.env (from aws.env.example), then re-run." >&2
+  exit 1
+fi
 iid=$(terraform -chdir="$root/infra/live" output -raw platform_instance_id)
 
 gql() { # QUERY: run it against Dagster on the platform host, print the JSON response. Fails after ~2 min.

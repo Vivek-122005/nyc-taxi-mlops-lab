@@ -57,12 +57,19 @@ def _candidate_key(dagster_run_id: str) -> str:
     return f"training/candidates/{dagster_run_id}.json"
 
 
-def _candidate(context: dg.AssetExecutionContext, artifacts: ArtifactBucket) -> Candidate:
+def _dagster_run_id(context: dg.AssetExecutionContext | dg.AssetCheckExecutionContext) -> str:
+    """Asset checks expose the Dagster run via context.run; assets also expose context.run_id."""
+    run_id = getattr(context, "run_id", None)
+    return run_id if run_id else context.run.run_id
+
+
+def _candidate(context: dg.AssetExecutionContext | dg.AssetCheckExecutionContext, artifacts: ArtifactBucket) -> Candidate:
     """The exact registered version produced by this Dagster run, never a global 'latest' lookup."""
+    dagster_run_id = _dagster_run_id(context)
     try:
-        return Candidate(**artifacts.read_json(_candidate_key(context.run_id)))
+        return Candidate(**artifacts.read_json(_candidate_key(dagster_run_id)))
     except FileNotFoundError as exc:
-        raise RuntimeError(f"candidate record for Dagster run {context.run_id} was not written by trained_model") from exc
+        raise RuntimeError(f"candidate record for Dagster run {dagster_run_id} was not written by trained_model") from exc
 
 
 def _promotion_policy() -> tuple[float, float] | None:

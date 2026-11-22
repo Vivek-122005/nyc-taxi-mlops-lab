@@ -1,9 +1,21 @@
+# CD: blue-green deploy of the app image CI just built (S3). Idle colour gets the new tag, smoke must
+# pass, then switch; the previous colour keeps running for rollback (workflow_dispatch with a tag, or
+# deploy/web.sh switch <other-colour> on the host).
 name: deploy-app
 
 on:
   workflow_run:
     workflows: [ci]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to put on the idle colour (default sha-<7 of this commit). Use to roll forward/back without waiting for CI.
+        required: false
+      switch_only:
+        description: If "true", only switch traffic to the colour that already runs this tag (app rollback without pulling).
+        required: false
+        default: "false"
 
 permissions:
   contents: read
@@ -17,31 +29,71 @@ jobs:
   deploy:
     # workflow_run is also emitted for PR checks. Both conditions protect the self-hosted host.
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.head_branch == 'main'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: [self-hosted, lab-app]
     env:
-      EXPECTED_GIT_SHA: ${{ github.event.workflow_run.head_sha }}
+      EXPECTED_GIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Derive the immutable image tag
-        run: echo "IMAGE_TAG=sha-${EXPECTED_GIT_SHA::7}" >> "$GITHUB_ENV"
+        run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "IMAGE_TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
+          else
+            echo "IMAGE_TAG=sha-${EXPECTED_GIT_SHA::7}" >> "$GITHUB_ENV"
+          fi
       - uses: docker/login-action@v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Deploy the app stack
+      - name: Blue-green deploy (or switch-only rollback)
         run: |
+          set -euo pipefail
           export IMAGE_PREFIX="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker compose -f deploy/compose.app.yaml pull
-          docker compose -f deploy/compose.app.yaml up -d --wait --remove-orphans
-      - name: Smoke test deployed provenance
-        run: |
-          actual=$(curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 2 http://127.0.0.1/version)
-          echo "$actual" | jq -e --arg sha "$EXPECTED_GIT_SHA" --arg tag "$IMAGE_TAG" \
-            '.service == "app" and .git_sha == $sha and .image_tag == $tag' >/dev/null
+          deploy/web.sh prepare
+          live=$(deploy/web.sh live | tr -d '[:space:]')
+          if [[ "$live" == "blue" ]]; then idle=green; elif [[ "$live" == "green" ]]; then idle=blue; else idle=blue; live=none; fi
+
+          if [[ "${{ inputs.switch_only }}" == "true" ]]; then
+            # Roll back / flip to whichever colour already has IMAGE_TAG.
+            for colour in blue green; do
+              [[ "$(deploy/web.sh tag "$colour")" == "$IMAGE_TAG" ]] || continue
+              deploy/web.sh switch "$colour"
+              deploy/web.sh smoke "$colour"
+              exit 0
+            done
+            echo "neither colour runs $IMAGE_TAG" >&2
+            exit 1
+          fi
+
+          blue_tag=$(deploy/web.sh tag blue)
+          green_tag=$(deploy/web.sh tag green)
+          if [[ "$idle" == "blue" ]]; then
+            export BLUE_TAG="$IMAGE_TAG"
+            export GREEN_TAG="${green_tag}"
+            [[ "$GREEN_TAG" == "none" ]] && export GREEN_TAG="$IMAGE_TAG"
+          else
+            export GREEN_TAG="$IMAGE_TAG"
+            export BLUE_TAG="${blue_tag}"
+            [[ "$BLUE_TAG" == "none" ]] && export BLUE_TAG="$IMAGE_TAG"
+          fi
+
+          docker compose -f deploy/compose.web.yaml pull "app-${idle}"
+          docker compose -f deploy/compose.web.yaml up -d --no-deps --wait --remove-orphans "app-${idle}"
+          # First cutover may recreate Traefik; give routes a moment, then smoke the idle colour.
+          sleep 5
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            deploy/web.sh smoke "$idle"
+          else
+            deploy/web.sh smoke "$idle" "$EXPECTED_GIT_SHA"
+          fi
+          deploy/web.sh switch "$idle"
+          deploy/web.sh status | tee /tmp/web-status.json
+          echo "live was $live -> now $idle with $IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"

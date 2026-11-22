@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copy the current Learner Lab session credentials into this repo's GitHub Actions secrets.
 #
-#   export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...   (AWS Details)
+# Fill aws.env (from aws.env.example) or export the three session vars, then:
 #   scripts/gh-secrets.sh
 #
 # Only workflows that call AWS from a GitHub-hosted runner need these (the S10 destroy workflow).
@@ -9,10 +9,12 @@
 # neither uses them. Session credentials die with the session: re-run after Start Lab when needed.
 # Values go to gh on stdin, never on the command line, and are never printed.
 set -euo pipefail
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
+root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 
 for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
-  [[ -n "${!v:-}" ]] || { echo "export $v first (Learner Lab > AWS Details)" >&2; exit 1; }
+  [[ -n "${!v:-}" ]] || { echo "set $v in $root/aws.env (Learner Lab > AWS Details) or export it first" >&2; exit 1; }
 done
 arn=$(aws sts get-caller-identity --query Arn --output text) ||
   { echo "these credentials are rejected (expired session?)" >&2; exit 1; }

@@ -8,10 +8,15 @@
 # stage-N means "ready to start SN": S0..S(N-1) are done. Every step is idempotent, and anything
 # that creates AWS resources asks first (terraform apply prompts).
 set -euo pipefail
-export AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1 AWS_PAGER=""
+root="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/load-aws-env.sh
+source "$root/scripts/load-aws-env.sh"
 
 n=${1:?usage: scripts/catch-up.sh N}
-root="$(cd "$(dirname "$0")/.." && pwd)"
+if ! aws sts get-caller-identity >/dev/null 2>&1; then
+  echo "AWS credentials missing or expired: paste this session's keys into $root/aws.env, then re-run." >&2
+  exit 1
+fi
 repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 
 after_s0() {
