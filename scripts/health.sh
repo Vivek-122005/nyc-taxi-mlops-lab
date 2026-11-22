@@ -30,41 +30,59 @@ if ip=$(curl -fsS -m 5 https://checkip.amazonaws.com); then
   else
     line WARN laptop-ip "$ip is not in ingress_cidrs ($tfvars): the app will refuse you"
   fi
+else
+  line WARN laptop-ip "could not determine current public IPv4"
 fi
 
 repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || repo=""
 runners=$( [[ -n $repo ]] && gh api "repos/$repo/actions/runners" -q '.runners[] | "\(.name)=\(.status)"' 2>/dev/null)
-while read -r role state ip; do
-  [[ -n $role ]] || continue
-  [[ $ip == None ]] && ip=""
-  runner=$(grep -o "lab-$role=[a-z]*" <<<"$runners" | cut -d= -f2)
-  detail="$state${ip:+, $ip}, runner ${runner:-not registered}"
-  # The LLM host gets its runner in S6; until then an unregistered one is fine.
-  if [[ $state == running && ( $runner == online || -z $runners || ( -z $runner && $role == llm ) ) ]]; then
-    line OK "$role" "$detail"
-  else
-    line FAIL "$role" "$detail"
-  fi
-done < <(aws ec2 describe-instances \
+if hosts=$(aws ec2 describe-instances \
   --filters Name=tag:project,Values=mlops-lab Name=instance-state-name,Values=pending,running,stopping,stopped \
-  --query 'Reservations[].Instances[].[Tags[?Key==`role`]|[0].Value, State.Name, PublicIpAddress]' --output text 2>/dev/null)
+  --query 'Reservations[].Instances[].[Tags[?Key==`role`]|[0].Value, State.Name, PublicIpAddress]' --output text 2>&1); then
+  found_host=0
+  while read -r role state ip; do
+    [[ -n $role ]] || continue
+    found_host=1
+    [[ $ip == None ]] && ip=""
+    runner=$(grep -o "lab-$role=[a-z]*" <<<"$runners" | cut -d= -f2)
+    detail="$state${ip:+, $ip}, runner ${runner:-not registered}"
+    # The LLM host gets its runner in S6; until then an unregistered one is fine.
+    if [[ $state == running && ( $runner == online || -z $runners || ( -z $runner && $role == llm ) ) ]]; then
+      line OK "$role" "$detail"
+    else
+      line FAIL "$role" "$detail"
+    fi
+  done <<<"$hosts"
+  ((found_host)) || line FAIL hosts "no mlops-lab hosts found"
+else
+  line FAIL hosts "could not query EC2 ($(tail -1 <<<"$hosts" | cut -c1-80))"
+fi
 
 state() { # NAME STATE WANTED HINT
   if [[ $2 == "$3" ]]; then line OK "$1" "$2"; elif [[ $2 == absent ]]; then line WARN "$1" "absent"; else line FAIL "$1" "$2: $4"; fi
 }
-rds=$(aws rds describe-db-instances --db-instance-identifier lab --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo absent)
-state rds "$rds" available "Dagster and MLflow need it (aws rds start-db-instance, ~7 min)"
-rs=$(aws redshift describe-clusters --cluster-identifier lab --query 'Clusters[0].ClusterStatus' --output text 2>/dev/null || echo absent)
-state redshift "$rs" available "ingestion and the marts need it (aws redshift resume-cluster, ~3 min)"
-nb=$(aws sagemaker describe-notebook-instance --notebook-instance-name lab --query NotebookInstanceStatus --output text 2>/dev/null || echo absent)
-# Nothing but exploration needs the notebook, so stopped is a working lab (and cheaper).
-if [[ $nb == Stopped ]]; then
-  line OK notebook "Stopped (when you need it: aws sagemaker start-notebook-instance --notebook-instance-name lab, ~6 min)"
+if rds=$(aws rds describe-db-instances --db-instance-identifier lab --query 'DBInstances[0].DBInstanceStatus' --output text 2>&1); then
+  state rds "$rds" available "Dagster and MLflow need it (aws rds start-db-instance, ~7 min)"
 else
-  state notebook "$nb" InService "aws sagemaker start-notebook-instance, ~6 min"
+  line FAIL rds "could not query RDS ($(tail -1 <<<"$rds" | cut -c1-80))"
+fi
+if rs=$(aws redshift describe-clusters --cluster-identifier lab --query 'Clusters[0].ClusterStatus' --output text 2>&1); then
+  state redshift "$rs" available "ingestion and the marts need it (aws redshift resume-cluster, ~3 min)"
+else
+  line FAIL redshift "could not query Redshift ($(tail -1 <<<"$rs" | cut -c1-80))"
+fi
+if nb=$(aws sagemaker describe-notebook-instance --notebook-instance-name lab --query NotebookInstanceStatus --output text 2>&1); then
+  # Nothing but exploration needs the notebook, so stopped is a working lab (and cheaper).
+  if [[ $nb == Stopped ]]; then
+    line OK notebook "Stopped (when you need it: aws sagemaker start-notebook-instance --notebook-instance-name lab, ~6 min)"
+  else
+    state notebook "$nb" InService "aws sagemaker start-notebook-instance, ~6 min"
+  fi
+else
+  line FAIL notebook "could not query SageMaker ($(tail -1 <<<"$nb" | cut -c1-80))"
 fi
 
-if app=$(terraform -chdir="$root/infra/live" output -raw app_public_ip 2>/dev/null); then
+if app=$(terraform -chdir="$root/infra/live" output -raw app_public_ip 2>&1); then
   if r=$(curl -fsS -m 10 "http://$app/predict" -H 'Content-Type: application/json' \
       -d '{"pickup_zone_id": 132, "dropoff_zone_id": 230, "pickup_datetime": "2024-03-08T17:05:00"}' 2>&1); then
     who=$(jq -r '.model | "\(.name) \(.alias // "") \(.version)"' <<<"$r")
@@ -72,6 +90,8 @@ if app=$(terraform -chdir="$root/infra/live" output -raw app_public_ip 2>/dev/nu
   else
     line FAIL predict "no answer from $app ($(tail -1 <<<"$r" | cut -c1-60))"
   fi
+else
+  line FAIL predict "could not read Terraform app_public_ip ($(tail -1 <<<"$app" | cut -c1-60))"
 fi
 
 if [[ -n $repo ]]; then
@@ -84,5 +104,7 @@ if [[ -n $repo ]]; then
   else
     line FAIL status "last status run: ${result:-none}${age:+ ${age} min ago}: run it now (gh workflow run status.yaml), then read its log"
   fi
+else
+  line FAIL status "could not identify the GitHub repository (run gh auth status and gh repo set-default)"
 fi
 exit $bad
